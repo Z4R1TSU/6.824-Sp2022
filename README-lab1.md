@@ -28,7 +28,7 @@
 ## 想法
 
 1. 出于效率考虑，使用条件变量 `sync.Cond` 来代替 Sleep。 
-2. RPC 的 IDL 的规范：入参和返回结构体定义在 `rpc.go`，而具体的 Service 定义在 `coordinator.go` 中。
+2. RPC 的 IDL 的规范：入参和返回结构体定义在 `rpc.go`，而具体的 Service 定义在 `worker.go` 中，实现在 `coordinator.go` 中。
 3. 为什么不传入执行 map 的 worker 数量？因为当我们开启 coordinator 进程后，并不依赖它来启动并组织 worker 去执行 map，而是我们需要自行启动 worker 集群，而让 coordinator 监听并接受请求，被动布置任务。
 4. **重要**：确认哪些地方需要用到 RPC（有 RPC 就需要显式定义出来）？worker 和 worker 间，worker 和 coordinator 间。
 5. map 阶段应该选择哪个 worker 来执行 map 任务？同 3，不是 coordinator 选，而是 worker 去领取。
