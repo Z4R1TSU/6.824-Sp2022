@@ -106,6 +106,8 @@ func doMapTask(mapf func(string, string) []KeyValue, taskId int, filename string
 			log.Fatalf("Map: cannot rename temp file: %v", intermediateFilename)
 		}
 	}
+	// 5. 通知 coordinator 任务已完成
+	CallTaskComplete(taskId)
 }
 
 func doReduceTask(reducef func(string, []string) string, taskId int, reduceId int) {
@@ -166,6 +168,8 @@ func doReduceTask(reducef func(string, []string) string, taskId int, reduceId in
 		i = j
 	}
 	file.Close()
+	// 5. 通知 coordinator 任务已完成
+	CallTaskComplete(taskId)
 }
 
 // example function to show how to make an RPC call to the coordinator.
@@ -205,14 +209,17 @@ func CallAssignTask() (*AssignTaskReply, error) {
 	return nil, fmt.Errorf("AssignTask failed")
 }
 
-func CallTaskComplete() (*TaskCompleteReply, error) {
-	args := TaskCompleteArgs{}
+func CallTaskComplete(taskId int) {
+	args := TaskCompleteArgs{
+		TaskId: taskId,
+	}
 	reply := TaskCompleteReply{}
 	ok := call("Coordinator.TaskComplete", &args, &reply)
 	if ok {
-		return &reply, nil
+		fmt.Printf("task %d has complete", args.TaskId)
+	} else {
+		fmt.Printf("task %d has not complete", args.TaskId)
 	}
-	return nil, fmt.Errorf("TaskComplete failed")
 }
 
 // send an RPC request to the coordinator, wait for the response.
