@@ -29,7 +29,7 @@ type Coordinator struct {
 	phase        Phase
 	taskQueue    chan Task
 	taskProgress map[int]chan struct{}
-	taskId       atomic.Int64
+	taskId       int64
 	wg           sync.WaitGroup
 }
 
@@ -104,7 +104,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		files:        files,
 		nReduce:      nReduce,
 		phase:        ReadyForMapping,
-		taskId:       atomic.Int64{},
+		taskId:       0,
 		taskQueue:    make(chan Task, nReduce),
 		taskProgress: make(map[int]chan struct{}),
 		wg:           sync.WaitGroup{},
@@ -116,12 +116,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		// 2.1. 将所有文件分配给 map 任务
 		for _, filename := range files {
 			mapTask := Task{
-				TaskId:   int(c.taskId.Load()),
+				TaskId:   int(c.taskId),
 				TaskType: MapTaskType,
 				Filename: filename,
 				ReduceId: nReduce,
 			}
-			c.taskId.Add(1)
+			atomic.AddInt64(&c.taskId, 1)
 			c.taskQueue <- mapTask
 		}
 		// 2.2. 等待 map 任务执行完毕
@@ -132,10 +132,10 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		// 2.4. 分配 reduce 任务并确认 reduce worker 的运行 ID
 		for i := 0; i < nReduce; i++ {
 			reduceTask := Task{
-				TaskId:   int(c.taskId.Load()),
+				TaskId:   int(c.taskId),
 				ReduceId: i,
 			}
-			c.taskId.Add(1)
+			atomic.AddInt64(&c.taskId, 1)
 			c.taskQueue <- reduceTask
 		}
 		// 2.5. 确保所有 reduce 任务执行完毕，更新 coordinator 状态为执行完毕
