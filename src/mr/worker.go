@@ -53,7 +53,8 @@ func Worker(mapf func(string, string) []KeyValue,
 		case ReduceTaskType:
 			doReduceTask(reducef, task.Task.TaskId, task.Task.ReduceId)
 		default:
-			log.Fatalf("Unknown task type: %v", task.Task.TaskType)
+			fmt.Println("worker finished all tasks")
+			return
 		}
 	}
 }
@@ -74,7 +75,7 @@ func doMapTask(mapf func(string, string) []KeyValue, taskId int, filename string
 	}
 	// 2. 执行 mapf 并保存到中间变量（同 key 会被保存在同一中间文件中，因此一组）中
 	kva := mapf(filename, string(content))
-	var intermediate [][]KeyValue
+	intermediate := make([][]KeyValue, nReduce)
 	// 3. 由键值对中 map 结果的 key 获取中间文件的 Y 值，也就是要处理 reduce 的 worker ID
 	for _, kv := range kva {
 		y := ihash(kv.Key) % nReduce
@@ -141,34 +142,38 @@ func doReduceTask(reducef func(string, []string) string, taskId int, reduceId in
 			}
 		}
 	}
-	// 3. 执行 reducef 前的前置初始化
-	sort.Sort(ByKey(kva))
+	// 3. 创建临时文件
 	filename := fmt.Sprintf("mr-out-%d", reduceId)
-	file, err := os.Create(filename)
+	tempFile, err := os.CreateTemp("./", filename)
 	if err != nil {
-		log.Fatalf("Reduce: cannot create file: %v", err)
+		log.Fatalf("Reduce: cannot create temp file: %v", filename)
 	}
-	// 4. 执行 mapducef
+	// 4. 执行 reducef 任务
+	sort.Sort(ByKey(kva))
 	i := 0
 	for i < len(kva) {
 		j := i + 1
-		for j < len(kva) && kva[j].Key == kva[j].Key {
+		for j < len(kva) && kva[j].Key == kva[i].Key {
 			j++
 		}
-		values := []string{}
+		var values []string
 		for k := i; k < j; k++ {
 			values = append(values, kva[k].Value)
 		}
 		output := reducef(kva[i].Key, values)
-		// 4.1. 写入结果键值对到最终文件中
-		_, err := fmt.Fprintf(file, "%v %v\n", kva[i].Key, output)
-		if err != nil {
-			log.Fatalf("Reduce: cannot write file: %v", err)
-		}
+		fmt.Fprintf(tempFile, "%v %v\n", kva[i].Key, output)
 		i = j
 	}
-	file.Close()
-	// 5. 通知 coordinator 任务已完成
+	// 5. 将临时文件重命名成最终文件
+	err = tempFile.Close()
+	if err != nil {
+		log.Fatalf("Reduce: cannot close temp file: %v", tempFile.Name())
+	}
+	err = os.Rename(tempFile.Name(), filename)
+	if err != nil {
+		log.Fatalf("Reduce: cannot rename temp file: %v", tempFile.Name())
+	}
+	// 6. 通知 coordinator 任务已完成
 	CallTaskComplete(taskId)
 }
 
@@ -202,11 +207,8 @@ func CallExample() {
 func CallAssignTask() (*AssignTaskReply, error) {
 	args := AssignTaskArgs{}
 	reply := AssignTaskReply{}
-	ok := call("Coordinator.AssignTask", &args, &reply)
-	if ok {
-		return &reply, nil
-	}
-	return nil, fmt.Errorf("AssignTask failed")
+	call("Coordinator.AssignTask", &args, &reply)
+	return &reply, nil
 }
 
 func CallTaskComplete(taskId int) {
@@ -214,12 +216,7 @@ func CallTaskComplete(taskId int) {
 		TaskId: taskId,
 	}
 	reply := TaskCompleteReply{}
-	ok := call("Coordinator.TaskComplete", &args, &reply)
-	if ok {
-		fmt.Printf("task %d has complete", args.TaskId)
-	} else {
-		fmt.Printf("task %d has not complete", args.TaskId)
-	}
+	call("Coordinator.TaskComplete", &args, &reply)
 }
 
 // send an RPC request to the coordinator, wait for the response.

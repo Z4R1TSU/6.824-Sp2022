@@ -29,7 +29,7 @@ type Coordinator struct {
 	phase        Phase
 	taskQueue    chan Task
 	taskProgress map[int]chan struct{}
-	taskId       int64
+	taskId       atomic.Int64
 	wg           sync.WaitGroup
 }
 
@@ -49,14 +49,18 @@ func (c *Coordinator) AssignTask(args *AssignTaskArgs, reply *AssignTaskReply) e
 		task := <-c.taskQueue
 		reply.Task = task
 		// 开启一个 goroutine 若 10s 内未返回完成进度则重新分配任务，若收到则当作任务执行完毕
+		taskId := task.TaskId
+		c.taskProgress[taskId] = make(chan struct{})
 		go func(taskProgress chan struct{}) {
+			timer := time.NewTimer(TimeOut)
+			defer timer.Stop()
 			select {
 			case <-taskProgress:
 				return
-			case <-time.After(TimeOut):
+			case <-timer.C:
 				c.taskQueue <- task
 			}
-		}(c.taskProgress[task.TaskId])
+		}(c.taskProgress[taskId])
 	} else {
 		c.Done()
 	}
@@ -68,7 +72,7 @@ func (c *Coordinator) TaskComplete(args *TaskCompleteArgs, reply *TaskCompleteRe
 	taskId := args.TaskId
 	taskProgress := c.taskProgress[taskId]
 	if taskProgress == nil {
-		return errors.New("task progress not found")
+		return errors.New("task Not Found")
 	}
 	taskProgress <- struct{}{}
 	c.wg.Done()
@@ -104,24 +108,23 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		files:        files,
 		nReduce:      nReduce,
 		phase:        ReadyForMapping,
-		taskId:       0,
+		taskId:       atomic.Int64{},
 		taskQueue:    make(chan Task, nReduce),
 		taskProgress: make(map[int]chan struct{}),
 		wg:           sync.WaitGroup{},
 	}
-
 	// 2. 将获取到的文件以任务队列的方式存储，为 worker 领取任务做准备
 	c.wg.Add(len(files))
 	go func(files []string, nReduce int) {
 		// 2.1. 将所有文件分配给 map 任务
 		for _, filename := range files {
 			mapTask := Task{
-				TaskId:   int(c.taskId),
+				TaskId:   int(c.taskId.Load()),
 				TaskType: MapTaskType,
 				Filename: filename,
 				ReduceId: nReduce,
 			}
-			atomic.AddInt64(&c.taskId, 1)
+			c.taskId.Add(1)
 			c.taskQueue <- mapTask
 		}
 		// 2.2. 等待 map 任务执行完毕
@@ -132,10 +135,11 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		// 2.4. 分配 reduce 任务并确认 reduce worker 的运行 ID
 		for i := 0; i < nReduce; i++ {
 			reduceTask := Task{
-				TaskId:   int(c.taskId),
+				TaskId:   int(c.taskId.Load()),
+				TaskType: ReduceTaskType,
 				ReduceId: i,
 			}
-			atomic.AddInt64(&c.taskId, 1)
+			c.taskId.Add(1)
 			c.taskQueue <- reduceTask
 		}
 		// 2.5. 确保所有 reduce 任务执行完毕，更新 coordinator 状态为执行完毕
